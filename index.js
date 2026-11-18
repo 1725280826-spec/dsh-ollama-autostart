@@ -25,10 +25,36 @@
  */
 import { spawn } from "node:child_process";
 import net from "node:net";
-import { existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { dirname } from "node:path";
 
 const PIDFILE = "/tmp/dsh-ollama-autostart.pid";
 const DEBUG_FILE = "/tmp/dsh-ollama-autostart-debug.json";
+
+/**
+ * The auto-start preference is a boot-time behavior, so it persists in a
+ * plugin-owned file under the DSH home (the same convention other plugins'
+ * user data uses) rather than in the row's config — the row config's editor
+ * lane may be unavailable in this profile.
+ */
+const DSH_HOME = process.env.DSH_HOME || "/root/.dsh";
+const PREFERENCE_FILE = `${DSH_HOME}/plugin-data/dsh-ollama-autostart/auto-start.json`;
+
+/** Read the auto-start switch: true unless the file explicitly says false. */
+function readAutoStart() {
+  try {
+    const value = JSON.parse(readFileSync(PREFERENCE_FILE, "utf8"));
+    return value && value.autoStart !== false;
+  } catch {
+    return true;
+  }
+}
+
+/** Persist the auto-start switch. */
+function writeAutoStart(enabled) {
+  mkdirSync(dirname(PREFERENCE_FILE), { recursive: true });
+  writeFileSync(PREFERENCE_FILE, JSON.stringify({ autoStart: !!enabled, updatedAt: new Date().toISOString() }, null, 1));
+}
 
 /** Debug marker for route-registration diagnostics (removed once verified). */
 function dbg(payload) {
@@ -272,12 +298,21 @@ export function apply(ctx, config) {
     return { ok: r.ok, endpoint, code: r.code ?? null, output: r.output || r.error || "" };
   };
 
-  /** Activation: start the service, then detect the version once. */
+  /**
+   * Activation: honor the auto-start switch — ON boots the service, OFF does
+   * not (the manual button and the other checks still work at any time). The
+   * version detection runs either way, once, on every host boot.
+   */
   (async () => {
+    const autoStart = readAutoStart();
     try {
-      const started = await ensureRunning();
-      if (started.started === false && started.reason === "already-listening") {
-        info(`ollama already listening on ${host}:${port} — skipped`);
+      if (autoStart) {
+        const started = await ensureRunning();
+        if (started.started === false && started.reason === "already-listening") {
+          info(`ollama already listening on ${host}:${port} — skipped`);
+        }
+      } else {
+        info(`auto-start switch is OFF — skipping the ollama serve boot (manual start still available)`);
       }
     } catch (err) {
       warn(`autostart failed: ${err?.message ?? String(err)}`);
@@ -318,6 +353,31 @@ export function apply(ctx, config) {
                 port,
                 version: state.version,
                 versionChecked: state.versionChecked,
+                autoStart: readAutoStart(),
+              });
+            case "/auto-start":
+              if (request.method !== "POST") return json({ error: "POST only" }, 405);
+              let body = {};
+              try {
+                body = await request.json();
+              } catch {
+                body = {};
+              }
+              const enabled = !!body.enabled;
+              writeAutoStart(enabled);
+              let startReport = null;
+              if (enabled) {
+                // Flipping ON while the host is running: bring the service up
+                // now, not only at the next boot.
+                startReport = await ensureRunning();
+              }
+              info(`auto-start switch ${enabled ? "ON" : "OFF"}${startReport?.started ? `; service starting (pid ${startReport.pid})` : ""}`);
+              return json({
+                ok: true,
+                autoStart: enabled,
+                started: startReport ? startReport.started : undefined,
+                pid: startReport ? startReport.pid : undefined,
+                reason: startReport ? startReport.reason : undefined,
               });
             case "/start":
               if (request.method !== "POST") return json({ error: "POST only" }, 405);

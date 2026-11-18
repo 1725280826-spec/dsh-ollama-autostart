@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Ollama 自启动",
-    "description": "DSH 宿主启动时自动拉起 ollama serve 后台服务；已在运行则自动跳过。"
+    "description": "DSH 宿主启动时自动拉起 ollama serve 后台服务；已在运行则跳过。插件页控制面板：手动启动、/api/tags 监听检查、/api/embed 直连测试、Ollama 版本检查（宿主启动时自动检测一次）、强制 IPv4 CLI 测试。"
   }
 }

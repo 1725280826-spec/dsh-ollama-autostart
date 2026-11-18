@@ -39,6 +39,14 @@
 
   var EN = {
     panelTitle: 'Ollama service',
+    autoStartTitle: 'Auto-start',
+    autoStartDesc: 'Start the ollama service automatically when the DSH host boots. Switching it off never stops a service that is already running.',
+    autoStartOn: 'Auto-start ON. {detail}',
+    autoStartOff: 'Auto-start OFF: the host will not start the service on boot. The running service (if any) is untouched.',
+    autoStartDetailStarted: 'the service was started now (pid {pid})',
+    autoStartDetailRunning: 'it is already running',
+    autoStartDetailNotReady: 'it was spawned (pid {pid}) but the port is not ready yet',
+    autoStartToggleFail: 'Toggle failed: {error}',
     startTitle: 'Start ollama service',
     startDesc: 'Launch `ollama serve` as a detached background service. Running services are detected and skipped.',
     startButton: 'Start',
@@ -74,6 +82,14 @@
 
   var ZH = {
     panelTitle: 'Ollama 服务',
+    autoStartTitle: '自启动',
+    autoStartDesc: '宿主（dsh）启动时自动拉起 ollama 服务。关闭开关不会停止已在运行的服务，只影响下次启动。',
+    autoStartOn: '已开启自启动。{detail}',
+    autoStartOff: '已关闭自启动：宿主启动时将不再自动拉起服务；当前正在运行的服务不受影响。',
+    autoStartDetailStarted: '服务已立即拉起（pid {pid}）',
+    autoStartDetailRunning: '服务已在运行',
+    autoStartDetailNotReady: '已拉起（pid {pid}），端口尚未就绪',
+    autoStartToggleFail: '切换失败：{error}',
     startTitle: '启动 ollama 服务',
     startDesc: '以分离后台服务方式拉起 `ollama serve`；已在运行则自动跳过。',
     startButton: '启动',
@@ -131,7 +147,19 @@
     '.oa_btn:disabled{color:var(--dsw-alias-label-caption);cursor:default}',
     '.oa_btn:focus-visible{outline:2px solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));',
     'outline-offset:2px}',
-    '.oa_btn{-webkit-tap-highlight-color:transparent;touch-action:manipulation}'
+    '.oa_btn{-webkit-tap-highlight-color:transparent;touch-action:manipulation}',
+    /* The auto-start switch: a real toggle (track + knob), not a button. */
+    '.oa_switch{flex:none;position:relative;width:46px;height:28px;border-radius:14px;border:1px solid var(--dsw-alias-border-l1);',
+    'background:var(--dsw-alias-bg-module-platform);cursor:pointer;transition:background .15s ease;',
+    '-webkit-tap-highlight-color:transparent;touch-action:manipulation;padding:0}',
+    '.oa_switch[aria-checked="true"]{background:var(--dsw-alias-state-business-primary, #3b82f6);',
+    'border-color:var(--dsw-alias-state-business-primary, #3b82f6)}',
+    '.oa_switch:focus-visible{outline:2px solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));',
+    'outline-offset:2px}',
+    '.oa_switch_knob{position:absolute;top:2px;left:2px;width:22px;height:22px;border-radius:50%;background:#fff;',
+    'box-shadow:0 1px 2px rgba(0,0,0,.35);transition:transform .15s ease}',
+    '.oa_switch[aria-checked="true"] .oa_switch_knob{transform:translateX(18px)}',
+    '.oa_switch:disabled{opacity:.5;cursor:default}'
   ].join('');
 
   /** Locale service face, captured on apply for the fallback translator. */
@@ -241,18 +269,86 @@
   }
 
   /**
+   * The auto-start switch row: a real toggle (role="switch"), seeded from the
+   * host's persisted preference. Flipping ON also starts the service now;
+   * flipping OFF only changes the next host boot.
+   * @param {object} ctx - the plugin's client cordis context (closure).
+   * @param {object} props - { t, autoStart, busy, onToggle }
+   */
+  function makeAutoStartRow(ctx, props) {
+    function AutoStartRow(rowProps) {
+      var t = typeof rowProps.t === 'function' ? rowProps.t : fallbackTranslate;
+      var result = React.useState(null);
+      var on = rowProps.autoStart !== false;
+
+      var toggle = function () {
+        if (rowProps.busy) return;
+        rowProps.onToggle(!on).then(function (outcome) {
+          if (outcome === null || outcome === undefined) return;
+          if (outcome.error) {
+            result[1]({ text: t('autoStartToggleFail', { error: outcome.error }), tone: 'fail' });
+            return;
+          }
+          if (outcome.autoStart === true) {
+            var detail = outcome.started === true
+              ? (outcome.reason === 'not-ready-within-30s'
+                ? t('autoStartDetailNotReady', { pid: outcome.pid })
+                : t('autoStartDetailStarted', { pid: outcome.pid }))
+              : t('autoStartDetailRunning');
+            result[1]({ text: t('autoStartOn', { detail: detail }), tone: 'ok' });
+          } else {
+            result[1]({ text: t('autoStartOff'), tone: 'ok' });
+          }
+        });
+      };
+
+      return React.createElement(
+        'div',
+        { className: 'oa_row' },
+        React.createElement(
+          'div',
+          { className: 'oa_text' },
+          React.createElement('div', { className: 'oa_title', children: t('autoStartTitle') }),
+          React.createElement('div', { className: 'oa_desc', children: t('autoStartDesc') }),
+          result[0]
+            ? React.createElement('div', {
+              className: 'oa_result oa_result_' + (result[0].tone || ''),
+              children: result[0].text
+            })
+            : null
+        ),
+        React.createElement(
+          'button',
+          {
+            type: 'button',
+            role: 'switch',
+            className: 'oa_switch',
+            'aria-checked': on,
+            'aria-label': t('autoStartTitle'),
+            disabled: rowProps.busy,
+            onClick: toggle
+          },
+          React.createElement('span', { className: 'oa_switch_knob', 'aria-hidden': 'true' })
+        )
+      );
+    }
+    AutoStartRow.displayName = 'AutoStartRow';
+    return AutoStartRow;
+  }
+
+  /**
    * The panel body: reads the host's status once on mount so the start row
-   * can render its disabled "already running" state, and wires the five
-   * rows to their prefix routes.
+   * can render its disabled "already running" state, and wires the rows to
+   * their prefix routes (auto-start switch + five action rows).
    * @param {object} ctx - the plugin's client cordis context.
    */
   function makePanel(ctx) {
     function OllamaPanel(props) {
       var t = typeof props.t === 'function' ? props.t : fallbackTranslate;
 
-      /** Row specs, built once per render pass (cheap plain objects). */
       var liveState = React.useState(null);
       var setLiveState = liveState[1];
+      var toggleBusy = React.useState(false);
 
       React.useEffect(function () {
         fetch(API + '/')
@@ -260,6 +356,32 @@
           .then(function (status) { setLiveState(status); })
           .catch(function () { setLiveState({}); });
       }, []);
+
+      /** POST the switch change; resolves to the host's outcome. */
+      function onToggle(enabled) {
+        toggleBusy[1](true);
+        return fetch(API + '/auto-start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: enabled })
+        })
+          .then(function (res) { return res.json().catch(function () { return { error: 'HTTP ' + res.status }; }); })
+          .then(function (outcome) {
+            setLiveState(function (prev) {
+              var next = prev === null || prev === undefined ? {} : prev;
+              next.autoStart = enabled;
+              return next;
+            });
+            return outcome;
+          })
+          .catch(function (err) {
+            return { error: String(err && err.message ? err.message : err) };
+          })
+          .then(function (outcome) {
+            toggleBusy[1](false);
+            return outcome;
+          });
+      }
 
       /** Refresh live facts after an action that mutates them. */
       function refreshLive() {
@@ -409,12 +531,20 @@
           : { ok: false, error: 'boot check failed' })
         : null;
 
+      var AutoStartRow = makeAutoStartRow(ctx);
       return React.createElement(
         'div',
         { className: 'oa_panel' },
         React.createElement('h3', {
           className: 'oa_panel_title',
           children: t('panelTitle')
+        }),
+        React.createElement(AutoStartRow, {
+          key: 'auto-start',
+          t: props.t,
+          autoStart: liveState !== null && liveState !== undefined ? liveState.autoStart : undefined,
+          busy: toggleBusy[0],
+          onToggle: onToggle
         }),
         rows.map(function (row) {
           var Row = makeRow(ctx, row.spec);
