@@ -329,22 +329,47 @@ export function apply(ctx, config) {
   if (typeof ctx?.inject === "function") {
     ctx.inject(["webServer"], (scoped) => {
       dbg({ phase: "webserver-fiber", registerType: typeof scoped.webServer?.register });
-      const json = (obj, status = 200) => new Response(JSON.stringify(obj), {
-        status,
-        headers: { "Content-Type": "application/json" },
-      });
-      const handle = async (request) => {
+      /**
+       * The webServer carrier passes node:http (req, res) to prefix handlers
+       * and awaits the handler — nothing converts a returned Web Response, so
+       * every reply MUST be written through res (writeHead + end) or the
+       * socket hangs open and the request never completes.
+       */
+      const handle = async (req, res) => {
+        const send = (payload, status = 200) => {
+          const body = JSON.stringify(payload);
+          res.writeHead(status, {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
+          });
+          res.end(body);
+        };
         let segment = "";
         try {
-          const url = new URL(request.url, "http://localhost");
-          segment = url.pathname.replace(new RegExp(`^${API_PREFIX}`), "").replace(/\/+$/, "");
+          const url = new URL(req.url ?? "/", "http://localhost");
+          const markerAt = url.pathname.indexOf(API_PREFIX);
+          segment = markerAt >= 0
+            ? url.pathname.slice(markerAt + API_PREFIX.length).replace(/\/+$/, "")
+            : "";
         } catch {
           segment = "";
         }
+        const method = String(req.method ?? "GET").toUpperCase();
+        /** Read a JSON body from the node request stream. */
+        const readBody = async () => {
+          let raw = "";
+          for await (const chunk of req) raw += chunk;
+          if (!raw) return {};
+          try {
+            return JSON.parse(raw);
+          } catch {
+            return {};
+          }
+        };
         try {
           switch (segment) {
             case "":
-              return json({
+              return send({
                 running: state.running,
                 listening: await portOpen(host, port),
                 startedByUs: state.startedByUs,
@@ -356,13 +381,8 @@ export function apply(ctx, config) {
                 autoStart: readAutoStart(),
               });
             case "/auto-start":
-              if (request.method !== "POST") return json({ error: "POST only" }, 405);
-              let body = {};
-              try {
-                body = await request.json();
-              } catch {
-                body = {};
-              }
+              if (method !== "POST") return send({ error: "POST only" }, 405);
+              const body = await readBody();
               const enabled = !!body.enabled;
               writeAutoStart(enabled);
               let startReport = null;
@@ -372,7 +392,7 @@ export function apply(ctx, config) {
                 startReport = await ensureRunning();
               }
               info(`auto-start switch ${enabled ? "ON" : "OFF"}${startReport?.started ? `; service starting (pid ${startReport.pid})` : ""}`);
-              return json({
+              return send({
                 ok: true,
                 autoStart: enabled,
                 started: startReport ? startReport.started : undefined,
@@ -380,26 +400,26 @@ export function apply(ctx, config) {
                 reason: startReport ? startReport.reason : undefined,
               });
             case "/start":
-              if (request.method !== "POST") return json({ error: "POST only" }, 405);
-              return json(await ensureRunning());
+              if (method !== "POST") return send({ error: "POST only" }, 405);
+              return send(await ensureRunning());
             case "/health":
-              if (request.method !== "POST") return json({ error: "POST only" }, 405);
-              return json(await health());
+              if (method !== "POST") return send({ error: "POST only" }, 405);
+              return send(await health());
             case "/embed-test":
-              if (request.method !== "POST") return json({ error: "POST only" }, 405);
-              return json(await embedTest());
+              if (method !== "POST") return send({ error: "POST only" }, 405);
+              return send(await embedTest());
             case "/version":
-              if (request.method !== "POST") return json({ error: "POST only" }, 405);
+              if (method !== "POST") return send({ error: "POST only" }, 405);
               const v = await checkVersion();
-              return json({ ok: v.ok, version: state.version, error: v.error });
+              return send({ ok: v.ok, version: state.version, error: v.error });
             case "/ipv4-cli":
-              if (request.method !== "POST") return json({ error: "POST only" }, 405);
-              return json(await ipv4CliTest());
+              if (method !== "POST") return send({ error: "POST only" }, 405);
+              return send(await ipv4CliTest());
             default:
-              return json({ error: `unknown endpoint "${segment}"` }, 404);
+              return send({ error: `unknown endpoint "${segment}"` }, 404);
           }
         } catch (err) {
-          return json({ error: String(err?.message ?? err) }, 500);
+          return send({ error: String(err?.message ?? err) }, 500);
         }
       };
       scoped.effect(

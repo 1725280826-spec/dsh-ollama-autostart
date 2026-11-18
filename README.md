@@ -15,6 +15,12 @@ DSH Host 插件：宿主（dsh）每次启动时自动拉起 `ollama serve` 后�
 >
 > **DSHA only.** This plugin targets DSHA (dsh running on Android, proot/Ubuntu). Desktop dsh does not need it — ollama there is normally managed by a system service.
 
+## 前置条件
+
+> 本插件为 **dsh-mnemon 扩展插件**：面板中的「强制 IPv4 CLI 测试」调用 `mnemon` CLI（由 dsh-mnemon 提供）。请先安装并启用 `dsh-mnemon`，再使用本插件。
+>
+> This plugin is an extension of **dsh-mnemon**: the forced-IPv4 CLI test invokes the `mnemon` CLI shipped by dsh-mnemon. Install and enable `dsh-mnemon` first.
+
 ## 行为
 
 宿主激活本插件时（`apply`）：
