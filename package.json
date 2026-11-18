@@ -1,22 +1,20 @@
 {
   "name": "dsh-ollama-autostart",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
-  "description": "Auto-starts the ollama serve background service when the DSH host boots; skips when ollama is already listening.",
+  "description": "Auto-starts the ollama serve background service when the DSH host boots, with a Plugins-page control panel: manual start, /api/tags listen check, direct /api/embed test, version check (auto at boot), and a forced-IPv4 CLI test.",
   "exports": {
     ".": "./index.js",
+    "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
-  "files": [
-    "index.js",
-    "cordis.patch.yml",
-    "locale/*.json",
-    "icon.svg"
-  ],
+  "files": ["index.js", "client.js", "cordis.patch.yml", "locale/*.json", "icon.svg"],
   "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true
     }
   }
 }
