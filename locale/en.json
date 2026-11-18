@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Ollama autostart",
+    "description": "Starts the ollama serve background service automatically when the DSH host boots; skips when ollama is already running."
+  }
+}

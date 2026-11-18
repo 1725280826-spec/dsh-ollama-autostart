@@ -1,0 +1,4 @@
+- insert:
+    - id: dsh-ollama-autostart
+      name: 'dsh-ollama-autostart'
+      config: {}

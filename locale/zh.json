@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Ollama 自启动",
+    "description": "DSH 宿主启动时自动拉起 ollama serve 后台服务；已在运行则自动跳过。"
+  }
+}
