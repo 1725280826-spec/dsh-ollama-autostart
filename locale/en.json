@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Ollama autostart",
-    "description": "Starts the ollama serve background service automatically when the DSH host boots; skips when ollama is already running. Plugins-page panel: manual start, /api/tags listen check, direct /api/embed test, Ollama version check (auto at boot), and a forced-IPv4 CLI test."
+    "description": "Starts the ollama serve background service automatically when the DSH host boots, with a Plugins-page control panel: auto-start switch, manual start, /api/tags listen check, direct /api/embed test, Ollama version check (auto at boot), and a forced-IPv4 CLI test."
   }
 }
