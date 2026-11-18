@@ -10,10 +10,10 @@ DSH Host 插件：宿主（dsh）每次启动时自动拉起 `ollama serve` 后�
 
 ## 支持环境：仅 DSHA
 
-> **本插件仅支持 DSHA**（Android 上以 proot/Ubuntu 运行 dsh 的环境）：宿主的 `/usr/local/bin/ollama` 由 DSHA 用户态提供，插件在宿主进程启动阶段自动完成服务拉起。
-> **桌面版 dsh（Desktop/CLI）不适用**：桌面环境的 ollama 通常由系统服务管理，本插件的行为语义（宿主启动即拉起、detached 存活、端口探测）按 DSHA 设计。
+> **本插件仅面向 DSHA**（Android 上以 proot/Ubuntu 运行 dsh 的环境）：宿主的 `/usr/local/bin/ollama` 由 DSHA 用户态提供，插件在宿主进程启动阶段自动完成服务拉起。
+> **桌面版 dsh（Desktop/CLI）不需要它**：桌面环境的 ollama 通常由系统服务（systemd 等）托管，不存在"宿主启动时顺手拉起"的需求。
 >
-> **DSHA only.** This plugin is designed for DSHA (dsh running on Android, proot/Ubuntu). It does not apply to desktop dsh.
+> **DSHA only.** This plugin targets DSHA (dsh running on Android, proot/Ubuntu). Desktop dsh does not need it — ollama there is normally managed by a system service.
 
 ## 行为
 
