@@ -28,6 +28,14 @@ import net from "node:net";
 import { existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 
 const PIDFILE = "/tmp/dsh-ollama-autostart.pid";
+const DEBUG_FILE = "/tmp/dsh-ollama-autostart-debug.json";
+
+/** Debug marker for route-registration diagnostics (removed once verified). */
+function dbg(payload) {
+  try {
+    writeFileSync(DEBUG_FILE, JSON.stringify({ at: new Date().toISOString(), ...payload }, null, 1));
+  } catch { /* diagnostics only */ }
+}
 const EMBED_TEST_TEXT = "测试文本";
 const API_PREFIX = "/api/ollama-autostart";
 
@@ -98,8 +106,23 @@ function runCommand(command, args, { timeoutMs = 30000, env } = {}) {
   });
 }
 
+/**
+ * Declaring any service puts this entry's fiber in the injection lane, which
+ * is what makes `ctx.inject` available on the context — a row with an empty
+ * inject list gets a plain service view without the nested-fiber capability.
+ * `tools` is present in every web-profile composition.
+ */
+export const inject = ["tools"];
+
 export function apply(ctx, config) {
   const cfg = config && typeof config === "object" ? config : {};
+  dbg({
+    phase: "apply",
+    hasInject: typeof ctx?.inject === "function",
+    hasEffect: typeof ctx?.effect === "function",
+    hasGet: typeof ctx?.get === "function",
+    webServerNow: typeof ctx?.get === "function" ? (ctx.get("webServer") ? "present" : "absent") : "n/a",
+  });
   const host = String(cfg.host ?? "127.0.0.1");
   const port = Number(cfg.port) > 0 ? Number(cfg.port) : 11434;
   const command = String(cfg.command ?? "ollama");
@@ -270,6 +293,7 @@ export function apply(ctx, config) {
    */
   if (typeof ctx?.inject === "function") {
     ctx.inject(["webServer"], (scoped) => {
+      dbg({ phase: "webserver-fiber", registerType: typeof scoped.webServer?.register });
       const json = (obj, status = 200) => new Response(JSON.stringify(obj), {
         status,
         headers: { "Content-Type": "application/json" },
@@ -319,7 +343,10 @@ export function apply(ctx, config) {
         }
       };
       scoped.effect(
-        () => scoped.webServer.register({ kind: "prefix", path: API_PREFIX, handler: handle }),
+        () => {
+          scoped.webServer.register({ kind: "prefix", path: API_PREFIX, handler: handle });
+          dbg({ phase: "routes-registered" });
+        },
         "ollama-autostart: api routes",
       );
       info(`settings API mounted at ${API_PREFIX}`);
