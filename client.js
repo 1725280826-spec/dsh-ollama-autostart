@@ -54,6 +54,12 @@
     startWaiting: 'Starting…',
     startStarted: 'Started (pid {pid})',
     startSkipped: 'Already listening — skipped',
+    modelsTitle: 'Query Ollama models',
+    modelsDesc: 'List the models pulled on this Ollama instance (GET /api/tags).',
+    modelsButton: 'Query models',
+    modelsOk: '{count} model(s):',
+    modelsNone: 'No models yet — pull one first (e.g. nomic-embed-text)',
+    modelsFail: 'Query failed: {error}',
     startNotReady: 'Spawned (pid {pid}); port not ready within 30s',
     startError: 'Start failed: {error}',
     listenTitle: 'Listen check',
@@ -97,6 +103,12 @@
     startWaiting: '正在启动…',
     startStarted: '已拉起（pid {pid}）',
     startSkipped: '端口已有服务在监听 — 已跳过',
+    modelsTitle: '查询 Ollama 模型',
+    modelsDesc: '列出本机 Ollama 已拉取的模型（GET /api/tags）。',
+    modelsButton: '查询模型',
+    modelsOk: '共 {count} 个模型：',
+    modelsNone: '暂无模型 — 请先拉取（如 nomic-embed-text）',
+    modelsFail: '查询失败：{error}',
     startNotReady: '已拉起（pid {pid}）；30 秒内端口未就绪',
     startError: '启动失败：{error}',
     listenTitle: '监听 ollama',
@@ -134,7 +146,7 @@
     '.oa_title{color:var(--dsw-alias-label-primary);font-size:14px;font-weight:400;line-height:20px}',
     '.oa_desc{color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:400;line-height:16px;',
     'max-width:56ch}',
-    '.oa_result{margin-top:4px;font-size:12px;line-height:16px;word-break:break-all;',
+    '.oa_result{margin-top:4px;font-size:12px;line-height:16px;word-break:break-all;white-space:pre-line;',
     'color:var(--dsw-alias-label-secondary)}',
     '.oa_result_ok{color:var(--dsw-alias-state-success, var(--dsw-alias-label-secondary))}',
     '.oa_result_fail{color:var(--dsw-alias-state-danger, var(--dsw-alias-label-secondary))}',
@@ -350,11 +362,45 @@
       var setLiveState = liveState[1];
       var toggleBusy = React.useState(false);
 
+      /**
+       * Load the host's status. The client module can mount BEFORE the host
+       * has finished registering the prefix routes (the webServer fiber pends
+       * behind the browser half), so the first fetch can miss them and 404 —
+       * a one-shot fetch would then pin the start row's "not running" state
+       * for the whole page life. Retry with backoff until a real status
+       * object arrives (or the budget is spent).
+       */
       React.useEffect(function () {
-        fetch(API + '/')
-          .then(function (res) { return res.json(); })
-          .then(function (status) { setLiveState(status); })
-          .catch(function () { setLiveState({}); });
+        var stopped = false;
+        var timer = null;
+        var attempt = 0;
+        var MAX_ATTEMPTS = 10;
+        var RETRY_MS = 3000;
+        function load() {
+          fetch(API + '/')
+            .then(function (res) { return res.ok ? res.json() : null; })
+            .then(function (status) {
+              if (stopped) return;
+              if (status && (typeof status.listening === 'boolean' || typeof status.running === 'boolean')) {
+                setLiveState(status);
+                return;
+              }
+              attempt += 1;
+              if (attempt < MAX_ATTEMPTS) timer = setTimeout(load, RETRY_MS);
+              else setLiveState({});
+            })
+            .catch(function () {
+              if (stopped) return;
+              attempt += 1;
+              if (attempt < MAX_ATTEMPTS) timer = setTimeout(load, RETRY_MS);
+              else setLiveState({});
+            });
+        }
+        load();
+        return function () {
+          stopped = true;
+          if (timer !== null) clearTimeout(timer);
+        };
       }, []);
 
       /** POST the switch change; resolves to the host's outcome. */
@@ -379,6 +425,7 @@
           })
           .then(function (outcome) {
             toggleBusy[1](false);
+            refreshLive();
             return outcome;
           });
       }
@@ -422,6 +469,30 @@
               return { text: translate('startSkipped'), tone: 'ok' };
             },
             onDone: refreshLive
+          }
+        },
+        {
+          key: 'models',
+          spec: {
+            title: 'modelsTitle',
+            desc: 'modelsDesc',
+            button: 'modelsButton',
+            run: function () {
+              return callHost('/models');
+            },
+            renderResult: function (outcome, translate) {
+              if (outcome === null || outcome === undefined) return null;
+              if (outcome.ok === true && Array.isArray(outcome.models)) {
+                if (outcome.models.length === 0) {
+                  return { text: translate('modelsNone'), tone: 'wait' };
+                }
+                var list = outcome.models
+                  .map(function (name) { return '· ' + name; })
+                  .join('\n');
+                return { text: translate('modelsOk', { count: outcome.models.length }) + '\n' + list, tone: 'ok' };
+              }
+              return { text: translate('modelsFail', { error: outcome.error || 'no response' }), tone: 'fail' };
+            }
           }
         },
         {

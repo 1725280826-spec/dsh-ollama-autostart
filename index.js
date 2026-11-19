@@ -256,6 +256,27 @@ export function apply(ctx, config) {
     }
   };
 
+  /** Requirement: list the models pulled on this Ollama instance. */
+  const listModels = async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const res = await fetch(`http://${host}:${port}/api/tags`, { signal: controller.signal });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) {
+        const names = Array.isArray(body.models)
+          ? body.models.map((m) => (typeof m === "string" ? m : m?.name)).filter(Boolean)
+          : [];
+        return { ok: true, models: names, count: names.length };
+      }
+      return { ok: false, error: `HTTP ${res.status}` };
+    } catch (err) {
+      return { ok: false, error: String(err?.message ?? err) };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   /**
    * Requirement 3: bypass DSH entirely — call Ollama's /api/embed directly.
    * An embeddings array means Ollama and the model are healthy; an error or an
@@ -405,6 +426,9 @@ export function apply(ctx, config) {
             case "/health":
               if (method !== "POST") return send({ error: "POST only" }, 405);
               return send(await health());
+            case "/models":
+              if (method !== "POST") return send({ error: "POST only" }, 405);
+              return send(await listModels());
             case "/embed-test":
               if (method !== "POST") return send({ error: "POST only" }, 405);
               return send(await embedTest());
