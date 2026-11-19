@@ -618,50 +618,62 @@
       }
 
       /**
-       * Load the host's status. The client module can mount BEFORE the host
-       * has finished registering the prefix routes (the webServer fiber pends
-       * behind the browser half), so the first fetch can miss them and 404 —
-       * a one-shot fetch would then pin the start row's "not running" state
-       * for the whole page life. Retry with backoff until a real status
-       * object arrives (or the budget is spent).
+       * Poll the host's status for the panel's whole mounted life.
+       *
+       * A one-shot fetch pins whatever the host answered at mount time — and
+       * this page can outlive host restarts and ollama state changes (the
+       * launcher's tab stays open while the host underneath it is replaced).
+       * A stale "not running" answer then keeps the start row un-greyed
+       * forever, which is exactly the reported bug. A light 5 s poll
+       * converges the panel to the live host state within one interval, and
+       * stops as soon as the user leaves the plugin page (the effect's
+       * cleanup clears the timer).
        */
       React.useEffect(function () {
         var stopped = false;
         var timer = null;
-        var attempt = 0;
-        var MAX_ATTEMPTS = 10;
-        var RETRY_MS = 3000;
-        function load() {
+        var POLL_MS = 5000;
+        var RETRY_MS = 1500;
+        var appliedOnce = false;
+        function tick() {
           fetch(API + '/')
             .then(function (res) {
-              report({ step: 'status-fetch', attempt: attempt, http: res ? res.status : null, ok: res ? res.ok : null });
               return res && res.ok ? res.json() : null;
             })
             .then(function (status) {
               if (stopped) return;
               if (status && (typeof status.listening === 'boolean' || typeof status.running === 'boolean')) {
                 setLiveState(status);
-                report({ step: 'status-applied', running: status.running, listening: status.listening });
-                return;
+                if (!appliedOnce) {
+                  appliedOnce = true;
+                  report({ step: 'status-applied', running: status.running, listening: status.listening });
+                }
+                timer = setTimeout(tick, POLL_MS);
+              } else {
+                report({ step: 'status-unusable', sample: String(JSON.stringify(status)).slice(0, 120) });
+                timer = setTimeout(tick, RETRY_MS);
               }
-              attempt += 1;
-              report({ step: 'status-unusable', attempt: attempt, sample: String(JSON.stringify(status)).slice(0, 160) });
-              if (attempt < MAX_ATTEMPTS) timer = setTimeout(load, RETRY_MS);
-              else setLiveState({});
             })
             .catch(function (err) {
               if (stopped) return;
-              attempt += 1;
-              report({ step: 'status-fetch-error', attempt: attempt, message: String(err && err.message ? err.message : err) });
-              if (attempt < MAX_ATTEMPTS) timer = setTimeout(load, RETRY_MS);
-              else setLiveState({});
+              report({ step: 'status-fetch-error', message: String(err && err.message ? err.message : err) });
+              timer = setTimeout(tick, RETRY_MS);
             });
         }
         report({ step: 'panel-mount' });
-        load();
+        tick();
+        /** Browsers throttle timers in background tabs; when the user comes
+         *  back to this page, re-sync immediately. */
+        var onVisible = function () {
+          if (stopped) return;
+          if (document.visibilityState === 'visible') tick();
+        };
+        document.addEventListener('visibilitychange', onVisible);
         return function () {
           stopped = true;
           if (timer !== null) clearTimeout(timer);
+          document.removeEventListener('visibilitychange', onVisible);
+          report({ step: 'panel-unmount' });
         };
       }, []);
 
