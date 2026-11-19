@@ -55,10 +55,14 @@
     startStarted: 'Started (pid {pid})',
     startSkipped: 'Already listening — skipped',
     modelsTitle: 'Query Ollama models',
-    modelsDesc: 'List the models pulled on this Ollama instance (GET /api/tags).',
+    modelsDesc: 'Run `ollama list` then `ollama ps`; fall back to `curl -s /api/tags` when both fail. Shows model names, sizes and the currently loaded models.',
     modelsButton: 'Query models',
-    modelsOk: '{count} model(s):',
-    modelsNone: 'No models yet — pull one first (e.g. nomic-embed-text)',
+    modelsNone: '(no pulled models yet)',
+    modelsPsEmpty: '(no models loaded right now)',
+    modelsListFailed: '(ollama list unavailable: {error})',
+    modelsPsFailed: '(ollama ps unavailable: {error})',
+    modelsApiOk: '{count} model(s) [via /api/tags fallback — sizes not available]:',
+    modelsApiEmpty: 'No models [via /api/tags fallback]',
     modelsFail: 'Query failed: {error}',
     startNotReady: 'Spawned (pid {pid}); port not ready within 30s',
     startError: 'Start failed: {error}',
@@ -104,10 +108,14 @@
     startStarted: '已拉起（pid {pid}）',
     startSkipped: '端口已有服务在监听 — 已跳过',
     modelsTitle: '查询 Ollama 模型',
-    modelsDesc: '列出本机 Ollama 已拉取的模型（GET /api/tags）。',
+    modelsDesc: '依次执行 `ollama list`、`ollama ps`；都失败时兜底 `curl -s /api/tags`。显示模型名称、占用与当前运行的模型。',
     modelsButton: '查询模型',
-    modelsOk: '共 {count} 个模型：',
-    modelsNone: '暂无模型 — 请先拉取（如 nomic-embed-text）',
+    modelsNone: '（暂无已拉取的模型）',
+    modelsPsEmpty: '（当前没有运行中的模型）',
+    modelsListFailed: '（ollama list 不可用：{error}）',
+    modelsPsFailed: '（ollama ps 不可用：{error}）',
+    modelsApiOk: '共 {count} 个模型（兜底 /api/tags，无占用信息）：',
+    modelsApiEmpty: '暂无模型（兜底 /api/tags）',
     modelsFail: '查询失败：{error}',
     startNotReady: '已拉起（pid {pid}）；30 秒内端口未就绪',
     startError: '启动失败：{error}',
@@ -482,16 +490,31 @@
             },
             renderResult: function (outcome, translate) {
               if (outcome === null || outcome === undefined) return null;
-              if (outcome.ok === true && Array.isArray(outcome.models)) {
-                if (outcome.models.length === 0) {
-                  return { text: translate('modelsNone'), tone: 'wait' };
-                }
-                var list = outcome.models
-                  .map(function (name) { return '· ' + name; })
-                  .join('\n');
-                return { text: translate('modelsOk', { count: outcome.models.length }) + '\n' + list, tone: 'ok' };
+              if (outcome.ok !== true) {
+                return { text: translate('modelsFail', { error: outcome.error || 'no response' }), tone: 'fail' };
               }
-              return { text: translate('modelsFail', { error: outcome.error || 'no response' }), tone: 'fail' };
+              if (outcome.source === 'cli') {
+                var parts = [];
+                parts.push(outcome.listOk
+                  ? ((outcome.list && outcome.list.length > 0) ? outcome.list : translate('modelsNone'))
+                  : translate('modelsListFailed', { error: String(outcome.listError || '').slice(0, 80) }));
+                parts.push(outcome.psOk
+                  ? ((outcome.ps && outcome.ps.length > 0) ? outcome.ps : translate('modelsPsEmpty'))
+                  : translate('modelsPsFailed', { error: String(outcome.psError || '').slice(0, 80) }));
+                return { text: parts.join('\n\n'), tone: 'ok' };
+              }
+              // api fallback (/api/tags): names only, no sizes.
+              if (Array.isArray(outcome.models)) {
+                if (outcome.models.length === 0) {
+                  return { text: translate('modelsApiEmpty'), tone: 'wait' };
+                }
+                var lines = outcome.models.map(function (name) { return '· ' + name; }).join('\n');
+                return {
+                  text: translate('modelsApiOk', { count: outcome.models.length }) + '\n' + lines,
+                  tone: 'ok'
+                };
+              }
+              return { text: translate('modelsFail', { error: 'no response' }), tone: 'fail' };
             }
           }
         },

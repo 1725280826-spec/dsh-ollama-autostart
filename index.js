@@ -256,25 +256,66 @@ export function apply(ctx, config) {
     }
   };
 
-  /** Requirement: list the models pulled on this Ollama instance. */
+  /**
+   * Requirement: model query with a CLI-first ladder:
+   *   1) `ollama list`   — pulled models with their sizes (占用);
+   *   2) `ollama ps`     — currently loaded/running models with VRAM;
+   *   3) fallback `curl -s /api/tags` when both CLI calls fail — parse the
+   *      JSON in-process (equivalent to the `| python -c` pipe, without a
+   *      python dependency).
+   */
   const listModels = async () => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 10_000);
-    try {
-      const res = await fetch(`http://${host}:${port}/api/tags`, { signal: controller.signal });
-      const body = await res.json().catch(() => ({}));
-      if (res.ok) {
-        const names = Array.isArray(body.models)
-          ? body.models.map((m) => (typeof m === "string" ? m : m?.name)).filter(Boolean)
-          : [];
-        return { ok: true, models: names, count: names.length };
-      }
-      return { ok: false, error: `HTTP ${res.status}` };
-    } catch (err) {
-      return { ok: false, error: String(err?.message ?? err) };
-    } finally {
-      clearTimeout(timer);
+    const listR = await runCommand("ollama", ["list"], { timeoutMs: 15_000 });
+    const psR = await runCommand("ollama", ["ps"], { timeoutMs: 15_000 });
+    if (listR.ok || psR.ok) {
+      return {
+        ok: true,
+        source: "cli",
+        list: (listR.output || "").trim(),
+        ps: (psR.output || "").trim(),
+        listOk: !!listR.ok,
+        psOk: !!psR.ok,
+        listError: listR.ok ? undefined : (listR.error ?? listR.output ?? "non-zero exit"),
+        psError: psR.ok ? undefined : (psR.error ?? psR.output ?? "non-zero exit"),
+      };
     }
+    // Ladder step 3: curl the HTTP API directly.
+    const curlR = await runCommand("curl", ["-s", "-m", "10", `http://${host}:${port}/api/tags`], { timeoutMs: 15_000 });
+    let names = null;
+    if (curlR.ok) {
+      try {
+        const body = JSON.parse(curlR.output || "{}");
+        names = Array.isArray(body.models)
+          ? body.models.map((m) => (typeof m === "string" ? m : m?.name)).filter(Boolean)
+          : null;
+      } catch {
+        names = null;
+      }
+    }
+    if (names === null) {
+      // Same URL through the in-process fetch (covers a missing curl).
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 10_000);
+        const res = await fetch(`http://${host}:${port}/api/tags`, { signal: controller.signal });
+        clearTimeout(timer);
+        if (res.ok) {
+          const body = await res.json().catch(() => ({}));
+          names = Array.isArray(body.models)
+            ? body.models.map((m) => (typeof m === "string" ? m : m?.name)).filter(Boolean)
+            : [];
+        }
+      } catch {
+        names = [];
+      }
+    }
+    return {
+      ok: true,
+      source: "api",
+      models: names,
+      note: "cli-unavailable",
+      cliError: (listR.error ?? psR.error ?? "").slice(0, 160),
+    };
   };
 
   /**
