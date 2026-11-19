@@ -1,7 +1,6 @@
 {
-  "name": "@local/dsh-ollama-autostart",
+  "name": "dsh-ollama-autostart",
   "version": "1.2.0",
-  "private": true,
   "type": "module",
   "description": "dsh-mnemon extension for DSH: auto-starts the ollama serve background service when the host boots, with a Plugins-page control panel (auto-start switch, manual start, /api/tags listen check, direct /api/embed test, Ollama version check, forced-IPv4 CLI test). 本插件为 dsh-mnemon 扩展插件，安装 dsh-mnemon 后再使用。",
   "exports": {
