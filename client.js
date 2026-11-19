@@ -635,6 +635,25 @@
         var POLL_MS = 5000;
         var RETRY_MS = 1500;
         var appliedOnce = false;
+        /**
+         * Direct Ollama probe, fully client-side: the browser talks straight
+         * to the Ollama server (Ollama's CORS echoes our origin back), so
+         * the start row's "already running" grey-out never depends on the
+         * host process's state machine or on when this page was loaded.
+         */
+        function probeOllama(endpoint) {
+          if (!endpoint) return Promise.resolve(null);
+          return fetch(endpoint + '/api/version', { mode: 'cors' })
+            .then(function (res) {
+              if (res.ok) {
+                return res.json().then(function (body) {
+                  return { running: true, version: (body && body.version) || null };
+                });
+              }
+              return null;
+            })
+            .catch(function () { return null; }); // refused / offline → not running
+        }
         function tick() {
           fetch(API + '/')
             .then(function (res) {
@@ -643,11 +662,42 @@
             .then(function (status) {
               if (stopped) return;
               if (status && (typeof status.listening === 'boolean' || typeof status.running === 'boolean')) {
-                setLiveState(status);
+                var endpoint = 'http://' + status.host + ':' + status.port;
+                // Merge additively: keep any previously known fact (pid,
+                // auto-start outcome) and only add what this poll knows.
+                setLiveState(function (prev) {
+                  var next = prev ? Object.assign({}, prev) : {};
+                  next.running = next.running || status.running || status.listening;
+                  next.listening = status.listening;
+                  next.startedByUs = status.startedByUs;
+                  next.pid = status.pid;
+                  next.host = status.host;
+                  next.port = status.port;
+                  next.version = status.version || next.version;
+                  next.versionChecked = status.versionChecked || next.versionChecked;
+                  next.autoStart = (status.autoStart !== null && status.autoStart !== undefined)
+                    ? status.autoStart
+                    : next.autoStart;
+                  return next;
+                });
                 if (!appliedOnce) {
                   appliedOnce = true;
                   report({ step: 'status-applied', running: status.running, listening: status.listening });
                 }
+                probeOllama(endpoint).then(function (probe) {
+                  if (stopped || !probe) return;
+                  setLiveState(function (prev) {
+                    var next = prev || {};
+                    next.ollamaEndpoint = endpoint;
+                    next.running = true;
+                    next.directRunning = true;
+                    if (probe.version) {
+                      next.version = probe.version;
+                      next.versionChecked = true;
+                    }
+                    return next;
+                  });
+                });
                 timer = setTimeout(tick, POLL_MS);
               } else {
                 report({ step: 'status-unusable', sample: String(JSON.stringify(status)).slice(0, 120) });
@@ -712,8 +762,12 @@
           .catch(function () { /* keep the previous snapshot */ });
       }
 
+      /** Grey the start row when ANY source says Ollama is up: the host's
+       *  boot-time port check, the host's live listening probe, or this
+       *  panel's own direct Ollama API probe (which is authoritative and
+       *  independent of how old this page load is). */
       var running = liveState !== null && liveState !== undefined
-        ? !!(liveState.running || liveState.listening)
+        ? !!(liveState.running || liveState.listening || liveState.directRunning)
         : false;
 
       // The host booted and ran the automatic version check; surface its
