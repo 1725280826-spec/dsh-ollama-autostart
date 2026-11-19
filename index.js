@@ -29,7 +29,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node
 import { dirname } from "node:path";
 
 const PIDFILE = "/tmp/dsh-ollama-autostart.pid";
-const DEBUG_FILE = "/tmp/dsh-ollama-autostart-debug.json";
 
 /**
  * The auto-start preference is a boot-time behavior, so it persists in a
@@ -56,12 +55,6 @@ function writeAutoStart(enabled) {
   writeFileSync(PREFERENCE_FILE, JSON.stringify({ autoStart: !!enabled, updatedAt: new Date().toISOString() }, null, 1));
 }
 
-/** Debug marker for route-registration diagnostics (removed once verified). */
-function dbg(payload) {
-  try {
-    writeFileSync(DEBUG_FILE, JSON.stringify({ at: new Date().toISOString(), ...payload }, null, 1));
-  } catch { /* diagnostics only */ }
-}
 const EMBED_TEST_TEXT = "测试文本";
 const API_PREFIX = "/api/ollama-autostart";
 
@@ -142,13 +135,6 @@ export const inject = ["tools"];
 
 export function apply(ctx, config) {
   const cfg = config && typeof config === "object" ? config : {};
-  dbg({
-    phase: "apply",
-    hasInject: typeof ctx?.inject === "function",
-    hasEffect: typeof ctx?.effect === "function",
-    hasGet: typeof ctx?.get === "function",
-    webServerNow: typeof ctx?.get === "function" ? (ctx.get("webServer") ? "present" : "absent") : "n/a",
-  });
   const host = String(cfg.host ?? "127.0.0.1");
   const port = Number(cfg.port) > 0 ? Number(cfg.port) : 11434;
   const command = String(cfg.command ?? "ollama");
@@ -445,7 +431,6 @@ export function apply(ctx, config) {
    */
   if (typeof ctx?.inject === "function") {
     ctx.inject(["webServer"], (scoped) => {
-      dbg({ phase: "webserver-fiber", registerType: typeof scoped.webServer?.register });
       /**
        * The webServer carrier passes node:http (req, res) to prefix handlers
        * and awaits the handler — nothing converts a returned Web Response, so
@@ -525,23 +510,6 @@ export function apply(ctx, config) {
             case "/models":
               if (method !== "POST") return send({ error: "POST only" }, 405);
               return send(await listModels());
-            case "/client-debug":
-              // Temporary diagnostics sink (removed once the grey-out bug is
-              // understood): the panel POSTs its fetch outcomes here so the
-              // host can see exactly what the browser received.
-              if (method !== "POST") return send({ error: "POST only" }, 405);
-              const dbgBody = await readBody();
-              try {
-                const file = "/tmp/dsh-ollama-autostart-client-debug.json";
-                let arr = [];
-                try {
-                  arr = JSON.parse(readFileSync(file, "utf8"));
-                  if (!Array.isArray(arr)) arr = [];
-                } catch { /* fresh file */ }
-                arr.push({ at: new Date().toISOString(), ...dbgBody });
-                writeFileSync(file, JSON.stringify(arr.slice(-60), null, 1));
-              } catch { /* diagnostics are best-effort */ }
-              return send({ ok: true });
             case "/embed-test":
               if (method !== "POST") return send({ error: "POST only" }, 405);
               return send(await embedTest());
@@ -562,7 +530,6 @@ export function apply(ctx, config) {
       scoped.effect(
         () => {
           scoped.webServer.register({ kind: "prefix", path: API_PREFIX, handler: handle });
-          dbg({ phase: "routes-registered" });
         },
         "ollama-autostart: api routes",
       );

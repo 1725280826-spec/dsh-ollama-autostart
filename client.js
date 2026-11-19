@@ -490,20 +490,6 @@
     var shown = result[0] !== null ? result[0] : seedView;
     var disabled = busy[0] || (props.disabled === true);
 
-    /** Temporary: report the ACTUAL rendered button state so we can see,
-     *  from the host side, whether the grey-out is being computed but not
-     *  rendered, or never computed at all. */
-    if (spec.key === 'start') {
-      var lastReported = { v: null };
-      React.useEffect(function () {
-        var v = String(disabled);
-        if (v !== lastReported.v) {
-          lastReported.v = v;
-          if (props.diagnose) props.diagnose({ buttonDisabled: disabled, busy: busy[0] });
-        }
-      });
-    }
-
     return React.createElement(
       'div',
       { className: 'oa_row' },
@@ -618,18 +604,11 @@
 
       var liveState = React.useState(null);
       var setLiveState = liveState[1];
+      /** The ACTUAL status snapshot (the second half of the useState tuple is
+       *  the setter; reading fields off the tuple itself would always be
+       *  undefined — the very bug that kept the start row from greying out). */
+      var live = liveState[0];
       var toggleBusy = React.useState(false);
-
-      /** Temporary diagnostics: report a step to the host's /client-debug sink. */
-      function report(obj) {
-        try {
-          fetch(API + '/client-debug', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(obj)
-          }).catch(function () {});
-        } catch (error) { /* diagnostics only */ }
-      }
 
       /**
        * Poll the host's status for the panel's whole mounted life.
@@ -648,8 +627,6 @@
         var timer = null;
         var POLL_MS = 5000;
         var RETRY_MS = 1500;
-        var appliedOnce = false;
-        var probeProbeChanged = { v: null };
         /**
          * Direct Ollama probe, fully client-side: the browser talks straight
          * to the Ollama server (Ollama's CORS echoes our origin back), so
@@ -678,16 +655,8 @@
               if (stopped) return;
               if (status && (typeof status.listening === 'boolean' || typeof status.running === 'boolean')) {
                 var endpoint = 'http://' + status.host + ':' + status.port;
-                if (!appliedOnce) {
-                  appliedOnce = true;
-                  report({ step: 'status-applied', running: status.running, listening: status.listening });
-                }
                 probeOllama(endpoint).then(function (probe) {
                   if (stopped) return;
-                  if (probeProbeChanged.v !== String(!!probe)) {
-                    probeProbeChanged.v = String(!!probe);
-                    report({ step: 'probe', up: !!probe, version: probe && probe.version });
-                  }
                   setLiveState(function (prev) {
                     var next = prev ? Object.assign({}, prev) : {};
                     next.listening = status.listening;
@@ -715,17 +684,14 @@
                 });
                 timer = setTimeout(tick, POLL_MS);
               } else {
-                report({ step: 'status-unusable', sample: String(JSON.stringify(status)).slice(0, 120) });
                 timer = setTimeout(tick, RETRY_MS);
               }
             })
-            .catch(function (err) {
+            .catch(function () {
               if (stopped) return;
-              report({ step: 'status-fetch-error', message: String(err && err.message ? err.message : err) });
               timer = setTimeout(tick, RETRY_MS);
             });
         }
-        report({ step: 'panel-mount' });
         tick();
         /** Browsers throttle timers in background tabs; when the user comes
          *  back to this page, re-sync immediately. */
@@ -738,7 +704,6 @@
           stopped = true;
           if (timer !== null) clearTimeout(timer);
           document.removeEventListener('visibilitychange', onVisible);
-          report({ step: 'panel-unmount' });
         };
       }, []);
 
@@ -781,17 +746,17 @@
        *  boot-time port check, the host's live listening probe, or this
        *  panel's own direct Ollama API probe (which is authoritative and
        *  independent of how old this page load is). */
-      var running = liveState !== null && liveState !== undefined
-        ? !!(liveState.running || liveState.listening || liveState.directRunning)
+      var running = live !== null && live !== undefined
+        ? !!(live.running || live.listening || live.directRunning)
         : false;
 
       // The host booted and ran the automatic version check; surface its
       // cached value as the version row's seed result (until the user
       // runs the check again). Row state itself stays with the (stable)
       // ActionRow components, so results persist until the panel unmounts.
-      var versionSeed = liveState !== null && liveState !== undefined && liveState.versionChecked
-        ? (liveState.version
-          ? { ok: true, version: liveState.version }
+      var versionSeed = live !== null && live !== undefined && live.versionChecked
+        ? (live.version
+          ? { ok: true, version: live.version }
           : { ok: false, error: 'boot check failed' })
         : null;
 
@@ -805,7 +770,7 @@
         React.createElement(AutoStartRow, {
           key: 'auto-start',
           ctx: ctx,
-          autoStart: liveState !== null && liveState !== undefined ? liveState.autoStart : undefined,
+          autoStart: live !== null && live !== undefined ? live.autoStart : undefined,
           busy: toggleBusy[0],
           onToggle: onToggle
         }),
@@ -816,16 +781,7 @@
             spec: def,
             disabled: def.key === 'start' ? running : undefined,
             seedResult: def.key === 'version' ? versionSeed : null,
-            onDone: def.key === 'start' ? refreshLive : undefined,
-            diagnose: def.key === 'start'
-              ? function (fields) {
-                  report(Object.assign({
-                    step: 'start-row-render',
-                    live: liveState || null,
-                    runningComputed: running
-                  }, fields));
-                }
-              : undefined
+            onDone: def.key === 'start' ? refreshLive : undefined
           });
         })
       );
