@@ -57,6 +57,8 @@
     modelsTitle: 'Query Ollama models',
     modelsDesc: 'Run `ollama list` then `ollama ps`; fall back to `curl -s /api/tags` when both fail. Shows model names, sizes and the currently loaded models.',
     modelsButton: 'Query models',
+    modelsHeadList: 'Pulled models (ollama list):',
+    modelsHeadPs: 'Currently loaded (ollama ps):',
     modelsNone: '(no pulled models yet)',
     modelsPsEmpty: '(no models loaded right now)',
     modelsListFailed: '(ollama list unavailable: {error})',
@@ -110,6 +112,8 @@
     modelsTitle: '查询 Ollama 模型',
     modelsDesc: '依次执行 `ollama list`、`ollama ps`；都失败时兜底 `curl -s /api/tags`。显示模型名称、占用与当前运行的模型。',
     modelsButton: '查询模型',
+    modelsHeadList: '已拉取的模型（ollama list）：',
+    modelsHeadPs: '当前运行中的模型（ollama ps）：',
     modelsNone: '（暂无已拉取的模型）',
     modelsPsEmpty: '（当前没有运行中的模型）',
     modelsListFailed: '（ollama list 不可用：{error}）',
@@ -188,7 +192,32 @@
   /** React runtime, assigned when the loader materializes this module. */
   var React = null;
 
-  /** Fallback translator used only if the slot's bound `t` prop is missing. */
+  /**
+   * Translator built from the LIVE app locale — this is what "follow the
+   * system/app language" means here: `ctx.locale.getLocale().active` is the
+   * same source the host UI renders from, so the panel always matches the
+   * language the rest of the GUI is in. Used for every panel string; the
+   * slot-bound `t` prop is kept only as a last-resort fallback.
+   */
+  function makeTranslator(ctx) {
+    var active = '';
+    try {
+      active = String((ctx && ctx.locale && ctx.locale.getLocale && ctx.locale.getLocale()) ? (ctx.locale.getLocale().active || '') : '');
+    } catch (error) {
+      active = '';
+    }
+    var dict = active.indexOf('zh') === 0 ? ZH : EN;
+    return function (key, params) {
+      var text = dict[key];
+      if (text === undefined) text = EN[key] !== undefined ? EN[key] : key;
+      if (!params) return text;
+      return String(text).replace(/\{(\w+)\}/g, function (match, name) {
+        return name in params ? String(params[name]) : match;
+      });
+    };
+  }
+
+  /** Fallback translator used only if the live locale face is missing. */
   function fallbackTranslate(key, params) {
     var active = localeFace !== null && typeof localeFace.getLocale === 'function'
       ? String(localeFace.getLocale().active || '')
@@ -224,7 +253,7 @@
    */
   function makeRow(ctx, spec) {
     function OllamaRow(props) {
-      var t = typeof props.t === 'function' ? props.t : fallbackTranslate;
+      var t = makeTranslator(ctx);
       var busy = React.useState(false);
       /** Seeded from the host's cached facts (the version row shows the boot
        *  auto-check result without the user clicking again). */
@@ -297,7 +326,7 @@
    */
   function makeAutoStartRow(ctx, props) {
     function AutoStartRow(rowProps) {
-      var t = typeof rowProps.t === 'function' ? rowProps.t : fallbackTranslate;
+      var t = makeTranslator(ctx);
       var result = React.useState(null);
       var on = rowProps.autoStart !== false;
 
@@ -364,7 +393,7 @@
    */
   function makePanel(ctx) {
     function OllamaPanel(props) {
-      var t = typeof props.t === 'function' ? props.t : fallbackTranslate;
+      var t = makeTranslator(ctx);
 
       var liveState = React.useState(null);
       var setLiveState = liveState[1];
@@ -495,12 +524,12 @@
               }
               if (outcome.source === 'cli') {
                 var parts = [];
-                parts.push(outcome.listOk
+                parts.push(translate('modelsHeadList') + '\n' + (outcome.listOk
                   ? ((outcome.list && outcome.list.length > 0) ? outcome.list : translate('modelsNone'))
-                  : translate('modelsListFailed', { error: String(outcome.listError || '').slice(0, 80) }));
-                parts.push(outcome.psOk
+                  : translate('modelsListFailed', { error: String(outcome.listError || '').slice(0, 80) })));
+                parts.push(translate('modelsHeadPs') + '\n' + (outcome.psOk
                   ? ((outcome.ps && outcome.ps.length > 0) ? outcome.ps : translate('modelsPsEmpty'))
-                  : translate('modelsPsFailed', { error: String(outcome.psError || '').slice(0, 80) }));
+                  : translate('modelsPsFailed', { error: String(outcome.psError || '').slice(0, 80) })));
                 return { text: parts.join('\n\n'), tone: 'ok' };
               }
               // api fallback (/api/tags): names only, no sizes.
