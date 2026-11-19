@@ -490,6 +490,20 @@
     var shown = result[0] !== null ? result[0] : seedView;
     var disabled = busy[0] || (props.disabled === true);
 
+    /** Temporary: report the ACTUAL rendered button state so we can see,
+     *  from the host side, whether the grey-out is being computed but not
+     *  rendered, or never computed at all. */
+    if (spec.key === 'start') {
+      var lastReported = { v: null };
+      React.useEffect(function () {
+        var v = String(disabled);
+        if (v !== lastReported.v) {
+          lastReported.v = v;
+          if (props.diagnose) props.diagnose({ buttonDisabled: disabled, busy: busy[0] });
+        }
+      });
+    }
+
     return React.createElement(
       'div',
       { className: 'oa_row' },
@@ -635,6 +649,7 @@
         var POLL_MS = 5000;
         var RETRY_MS = 1500;
         var appliedOnce = false;
+        var probeProbeChanged = { v: null };
         /**
          * Direct Ollama probe, fully client-side: the browser talks straight
          * to the Ollama server (Ollama's CORS echoes our origin back), so
@@ -669,6 +684,10 @@
                 }
                 probeOllama(endpoint).then(function (probe) {
                   if (stopped) return;
+                  if (probeProbeChanged.v !== String(!!probe)) {
+                    probeProbeChanged.v = String(!!probe);
+                    report({ step: 'probe', up: !!probe, version: probe && probe.version });
+                  }
                   setLiveState(function (prev) {
                     var next = prev ? Object.assign({}, prev) : {};
                     next.listening = status.listening;
@@ -797,7 +816,16 @@
             spec: def,
             disabled: def.key === 'start' ? running : undefined,
             seedResult: def.key === 'version' ? versionSeed : null,
-            onDone: def.key === 'start' ? refreshLive : undefined
+            onDone: def.key === 'start' ? refreshLive : undefined,
+            diagnose: def.key === 'start'
+              ? function (fields) {
+                  report(Object.assign({
+                    step: 'start-row-render',
+                    live: liveState || null,
+                    runningComputed: running
+                  }, fields));
+                }
+              : undefined
           });
         })
       );
