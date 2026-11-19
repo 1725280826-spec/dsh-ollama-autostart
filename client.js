@@ -663,38 +663,34 @@
               if (stopped) return;
               if (status && (typeof status.listening === 'boolean' || typeof status.running === 'boolean')) {
                 var endpoint = 'http://' + status.host + ':' + status.port;
-                // Merge additively: keep any previously known fact (pid,
-                // auto-start outcome) and only add what this poll knows.
-                setLiveState(function (prev) {
-                  var next = prev ? Object.assign({}, prev) : {};
-                  next.running = next.running || status.running || status.listening;
-                  next.listening = status.listening;
-                  next.startedByUs = status.startedByUs;
-                  next.pid = status.pid;
-                  next.host = status.host;
-                  next.port = status.port;
-                  next.version = status.version || next.version;
-                  next.versionChecked = status.versionChecked || next.versionChecked;
-                  next.autoStart = (status.autoStart !== null && status.autoStart !== undefined)
-                    ? status.autoStart
-                    : next.autoStart;
-                  return next;
-                });
                 if (!appliedOnce) {
                   appliedOnce = true;
                   report({ step: 'status-applied', running: status.running, listening: status.listening });
                 }
                 probeOllama(endpoint).then(function (probe) {
-                  if (stopped || !probe) return;
+                  if (stopped) return;
                   setLiveState(function (prev) {
-                    var next = prev || {};
-                    next.ollamaEndpoint = endpoint;
-                    next.running = true;
-                    next.directRunning = true;
-                    if (probe.version) {
+                    var next = prev ? Object.assign({}, prev) : {};
+                    next.listening = status.listening;
+                    next.startedByUs = status.startedByUs;
+                    next.pid = status.pid;
+                    next.host = status.host;
+                    next.port = status.port;
+                    next.autoStart = (status.autoStart !== null && status.autoStart !== undefined)
+                      ? status.autoStart
+                      : next.autoStart;
+                    // FRESH each tick (no sticky-true): host fact + this tick's
+                    // direct Ollama probe. Stops → un-grey within one poll.
+                    next.directRunning = !!probe;
+                    next.running = !!(status.running || status.listening || probe);
+                    if (probe && probe.version) {
                       next.version = probe.version;
                       next.versionChecked = true;
+                    } else if (status.version) {
+                      next.version = status.version;
+                      next.versionChecked = status.versionChecked || next.versionChecked;
                     }
+                    next.ollamaEndpoint = endpoint;
                     return next;
                   });
                 });
