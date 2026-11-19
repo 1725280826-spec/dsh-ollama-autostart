@@ -257,12 +257,58 @@ export function apply(ctx, config) {
   };
 
   /**
+   * Parse one `ollama list` / `ollama ps` table into structured rows.
+   *
+   * The CLI prints variable-width, whitespace-aligned columns, so header-based
+   * slice offsets break as soon as a value is wider than its column (e.g. a
+   * runner name of "llamacpp" against a 9-wide CONTEXT gap). Instead each row
+   * is extracted by anchoring the value patterns themselves:
+   *
+   *   list:  <name>  <8+ hex id | "unknown">  <number K/M/G TB | N/A>  <rest...>
+   *   ps:    <name>  <id>  <size>  <processor>  <number>  <runner>  <rest...>
+   *
+   * The name is whatever sits before the id anchor, so it stays intact even
+   * when it is wider than the header column. Empty tables come back as []
+   * (the CLI prints either just the header or a "No running models" line).
+   */
+  const LIST_COLUMNS = ["name", "id", "size", "modified"];
+  const PS_COLUMNS = ["name", "id", "size", "processor", "context", "runner", "until"];
+  const RE_LIST_ROW = /^(.*\S)\s+([0-9a-f]{8,}|unknown)\s+(\d+(?:\.\d+)?\s*[KMGT]?B|\d+(?:\.\d+)?\s*%?\s*\w*|N\/A)\s*(.*)$/i;
+  const RE_PS_ROW = /^(.*\S)\s+([0-9a-f]{8,}|unknown)\s+(\d+(?:\.\d+)?\s*[KMGT]?B|N\/A)\s+(.*?)\s+(\d+)\s+(\S+)\s*(.*)$/;
+
+  const parseAligned = (text, columns, rowRe, tail) => {
+    const lines = (text || "").split("\n").map((l) => l.replace(/\s+$/, "")).filter((l) => l.trim().length > 0);
+    const rows = [];
+    for (const line of lines) {
+      // Skip headers and the CLI's empty-state annotations.
+      if (/^NAME\b/.test(line) || /no running models/i.test(line)) continue;
+      const m = rowRe.exec(line);
+      if (!m) continue;
+      const [, name, id, size, ...rest] = m;
+      const row = { name: name.trim(), id, size };
+      if (tail === "modified" && rest[0]) row.modified = rest[0].trim();
+      if (tail === "ps") {
+        row.processor = (rest[0] || "").trim();
+        row.context = (rest[1] || "").trim();
+        row.runner = (rest[2] || "").trim();
+        row.until = (rest[3] || "").trim();
+      }
+      if (columns.some((key) => row[key])) rows.push(row);
+    }
+    return rows;
+  };
+
+  /**
    * Requirement: model query with a CLI-first ladder:
    *   1) `ollama list`   — pulled models with their sizes (占用);
    *   2) `ollama ps`     — currently loaded/running models with VRAM;
    *   3) fallback `curl -s /api/tags` when both CLI calls fail — parse the
    *      JSON in-process (equivalent to the `| python -c` pipe, without a
    *      python dependency).
+   *
+   * The CLI tables are parsed into structured rows here; the client renders
+   * them with localized labels, so the panel language never depends on the
+   * CLI's own (English) output.
    */
   const listModels = async () => {
     const listR = await runCommand("ollama", ["list"], { timeoutMs: 15_000 });
@@ -271,12 +317,14 @@ export function apply(ctx, config) {
       return {
         ok: true,
         source: "cli",
-        list: (listR.output || "").trim(),
-        ps: (psR.output || "").trim(),
-        listOk: !!listR.ok,
-        psOk: !!psR.ok,
-        listError: listR.ok ? undefined : (listR.error ?? listR.output ?? "non-zero exit"),
-        psError: psR.ok ? undefined : (psR.error ?? psR.output ?? "non-zero exit"),
+        list: {
+          rows: listR.ok ? parseAligned(listR.output, LIST_COLUMNS, RE_LIST_ROW, "modified") : [],
+          error: listR.ok ? undefined : (listR.error ?? listR.output ?? "non-zero exit"),
+        },
+        ps: {
+          rows: psR.ok ? parseAligned(psR.output, PS_COLUMNS, RE_PS_ROW, "ps") : [],
+          error: psR.ok ? undefined : (psR.error ?? psR.output ?? "non-zero exit"),
+        },
       };
     }
     // Ladder step 3: curl the HTTP API directly.

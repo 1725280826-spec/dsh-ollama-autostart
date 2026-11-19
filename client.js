@@ -59,6 +59,13 @@
     modelsButton: 'Query models',
     modelsHeadList: 'Pulled models (ollama list):',
     modelsHeadPs: 'Currently loaded (ollama ps):',
+    modelsSizeLabel: 'size',
+    modelsModifiedLabel: 'modified',
+    modelsUsageLabel: 'usage',
+    modelsProcessorLabel: 'processor',
+    modelsContextLabel: 'context',
+    modelsRunnerLabel: 'runner',
+    modelsUntilLabel: 'until',
     modelsNone: '(no pulled models yet)',
     modelsPsEmpty: '(no models loaded right now)',
     modelsListFailed: '(ollama list unavailable: {error})',
@@ -114,6 +121,13 @@
     modelsButton: '查询模型',
     modelsHeadList: '已拉取的模型（ollama list）：',
     modelsHeadPs: '当前运行中的模型（ollama ps）：',
+    modelsSizeLabel: '大小',
+    modelsModifiedLabel: '修改于',
+    modelsUsageLabel: '占用',
+    modelsProcessorLabel: '处理器',
+    modelsContextLabel: '上下文',
+    modelsRunnerLabel: '运行器',
+    modelsUntilLabel: '保留至',
     modelsNone: '（暂无已拉取的模型）',
     modelsPsEmpty: '（当前没有运行中的模型）',
     modelsListFailed: '（ollama list 不可用：{error}）',
@@ -524,12 +538,40 @@
               }
               if (outcome.source === 'cli') {
                 var parts = [];
-                parts.push(translate('modelsHeadList') + '\n' + (outcome.listOk
-                  ? ((outcome.list && outcome.list.length > 0) ? outcome.list : translate('modelsNone'))
-                  : translate('modelsListFailed', { error: String(outcome.listError || '').slice(0, 80) })));
-                parts.push(translate('modelsHeadPs') + '\n' + (outcome.psOk
-                  ? ((outcome.ps && outcome.ps.length > 0) ? outcome.ps : translate('modelsPsEmpty'))
-                  : translate('modelsPsFailed', { error: String(outcome.psError || '').slice(0, 80) })));
+                var listRows = outcome.list && Array.isArray(outcome.list.rows) ? outcome.list.rows : [];
+                var psRows = outcome.ps && Array.isArray(outcome.ps.rows) ? outcome.ps.rows : [];
+                var kv = function (label, value) {
+                  return value ? label + ': ' + value : '';
+                };
+                // Section 1: pulled models (names + sizes, localized labels).
+                if (outcome.list && outcome.list.error) {
+                  parts.push(translate('modelsListFailed', { error: String(outcome.list.error).slice(0, 80) }));
+                } else if (listRows.length === 0) {
+                  parts.push(translate('modelsHeadList') + '\n' + translate('modelsNone'));
+                } else {
+                  parts.push(translate('modelsHeadList') + '\n' + listRows.map(function (r) {
+                    return '· ' + r.name + '  ' + [
+                      kv(translate('modelsSizeLabel'), r.size),
+                      kv(translate('modelsModifiedLabel'), r.modified)
+                    ].filter(Boolean).join('  ');
+                  }).join('\n'));
+                }
+                // Section 2: currently loaded models (usage + runtime, localized).
+                if (outcome.ps && outcome.ps.error) {
+                  parts.push(translate('modelsPsFailed', { error: String(outcome.ps.error).slice(0, 80) }));
+                } else if (psRows.length === 0) {
+                  parts.push(translate('modelsHeadPs') + '\n' + translate('modelsPsEmpty'));
+                } else {
+                  parts.push(translate('modelsHeadPs') + '\n' + psRows.map(function (r) {
+                    return '· ' + r.name + '  ' + [
+                      kv(translate('modelsUsageLabel'), r.size),
+                      kv(translate('modelsProcessorLabel'), r.processor),
+                      kv(translate('modelsContextLabel'), r.context),
+                      kv(translate('modelsRunnerLabel'), r.runner),
+                      kv(translate('modelsUntilLabel'), r.until)
+                    ].filter(Boolean).join('  ');
+                  }).join('\n'));
+                }
                 return { text: parts.join('\n\n'), tone: 'ok' };
               }
               // api fallback (/api/tags): names only, no sizes.
