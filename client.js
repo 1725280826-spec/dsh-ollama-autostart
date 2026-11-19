@@ -174,8 +174,10 @@
     'max-width:56ch}',
     '.oa_result{margin-top:4px;font-size:12px;line-height:16px;word-break:break-all;white-space:pre-line;',
     'color:var(--dsw-alias-label-secondary)}',
-    '.oa_result_ok{color:var(--dsw-alias-state-success, var(--dsw-alias-label-secondary))}',
-    '.oa_result_fail{color:var(--dsw-alias-state-danger, var(--dsw-alias-label-secondary))}',
+    /* Success/failure verdicts get semantic colors (theme tokens with a
+       readable green/red fallback) so the outcome reads at a glance. */
+    '.oa_result_ok{color:var(--dsw-alias-state-success, #4caf50)}',
+    '.oa_result_fail{color:var(--dsw-alias-state-danger, #f44336)}',
     '.oa_result_wait{color:var(--dsw-alias-label-tertiary)}',
     '.oa_btn{flex:none;display:inline-flex;align-items:center;justify-content:center;height:36px;',
     'min-width:96px;padding:0 14px;border:none;border-radius:var(--dsw-radius-md);',
@@ -413,6 +415,17 @@
       var setLiveState = liveState[1];
       var toggleBusy = React.useState(false);
 
+      /** Temporary diagnostics: report a step to the host's /client-debug sink. */
+      function report(obj) {
+        try {
+          fetch(API + '/client-debug', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(obj)
+          }).catch(function () {});
+        } catch (error) { /* diagnostics only */ }
+      }
+
       /**
        * Load the host's status. The client module can mount BEFORE the host
        * has finished registering the prefix routes (the webServer fiber pends
@@ -429,24 +442,31 @@
         var RETRY_MS = 3000;
         function load() {
           fetch(API + '/')
-            .then(function (res) { return res.ok ? res.json() : null; })
+            .then(function (res) {
+              report({ step: 'status-fetch', attempt: attempt, http: res ? res.status : null, ok: res ? res.ok : null });
+              return res && res.ok ? res.json() : null;
+            })
             .then(function (status) {
               if (stopped) return;
               if (status && (typeof status.listening === 'boolean' || typeof status.running === 'boolean')) {
                 setLiveState(status);
+                report({ step: 'status-applied', running: status.running, listening: status.listening });
                 return;
               }
               attempt += 1;
+              report({ step: 'status-unusable', attempt: attempt, sample: String(JSON.stringify(status)).slice(0, 160) });
               if (attempt < MAX_ATTEMPTS) timer = setTimeout(load, RETRY_MS);
               else setLiveState({});
             })
-            .catch(function () {
+            .catch(function (err) {
               if (stopped) return;
               attempt += 1;
+              report({ step: 'status-fetch-error', attempt: attempt, message: String(err && err.message ? err.message : err) });
               if (attempt < MAX_ATTEMPTS) timer = setTimeout(load, RETRY_MS);
               else setLiveState({});
             });
         }
+        report({ step: 'panel-mount' });
         load();
         return function () {
           stopped = true;
@@ -557,6 +577,7 @@
                   }).join('\n'));
                 }
                 // Section 2: currently loaded models (usage + runtime, localized).
+                var anySectionError = (outcome.list && !!outcome.list.error) || (outcome.ps && !!outcome.ps.error);
                 if (outcome.ps && outcome.ps.error) {
                   parts.push(translate('modelsPsFailed', { error: String(outcome.ps.error).slice(0, 80) }));
                 } else if (psRows.length === 0) {
@@ -572,7 +593,10 @@
                     ].filter(Boolean).join('  ');
                   }).join('\n'));
                 }
-                return { text: parts.join('\n\n'), tone: 'ok' };
+                return {
+                  text: parts.join('\n\n'),
+                  tone: anySectionError ? 'fail' : ((listRows.length > 0 || psRows.length > 0) ? 'ok' : 'wait')
+                };
               }
               // api fallback (/api/tags): names only, no sizes.
               if (Array.isArray(outcome.models)) {

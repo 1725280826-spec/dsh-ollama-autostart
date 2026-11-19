@@ -518,6 +518,23 @@ export function apply(ctx, config) {
             case "/models":
               if (method !== "POST") return send({ error: "POST only" }, 405);
               return send(await listModels());
+            case "/client-debug":
+              // Temporary diagnostics sink (removed once the grey-out bug is
+              // understood): the panel POSTs its fetch outcomes here so the
+              // host can see exactly what the browser received.
+              if (method !== "POST") return send({ error: "POST only" }, 405);
+              const dbgBody = await readBody();
+              try {
+                const file = "/tmp/dsh-ollama-autostart-client-debug.json";
+                let arr = [];
+                try {
+                  arr = JSON.parse(readFileSync(file, "utf8"));
+                  if (!Array.isArray(arr)) arr = [];
+                } catch { /* fresh file */ }
+                arr.push({ at: new Date().toISOString(), ...dbgBody });
+                writeFileSync(file, JSON.stringify(arr.slice(-60), null, 1));
+              } catch { /* diagnostics are best-effort */ }
+              return send({ ok: true });
             case "/embed-test":
               if (method !== "POST") return send({ error: "POST only" }, 405);
               return send(await embedTest());
