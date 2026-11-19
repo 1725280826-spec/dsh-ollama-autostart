@@ -422,7 +422,14 @@ export function apply(ctx, config) {
           info(`ollama already listening on ${host}:${port} — skipped`);
         }
       } else {
-        info(`auto-start switch is OFF — skipping the ollama serve boot (manual start still available)`);
+        // Switch OFF: do not boot the service, but still probe the port once
+        // at host start so the status endpoint's `running` reflects reality
+        // (the panel's start row greys out from this boot-time fact).
+        state.running = await portOpen(host, port);
+        info(
+          `auto-start switch is OFF — not booting ollama serve ` +
+          `(boot-time port check: ${state.running ? "listening" : "not listening"}; manual start still available)`,
+        );
       }
     } catch (err) {
       warn(`autostart failed: ${err?.message ?? String(err)}`);

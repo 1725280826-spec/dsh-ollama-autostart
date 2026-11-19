@@ -262,87 +262,280 @@
   }
 
   /**
-   * One settings row: title, description, an action button and a result
-   * line. `run()` performs the request and returns the result object;
-   * `renderResult()` turns a result into { text, tone }.
-   * @param {object} ctx - the plugin's client cordis context (closure).
+   * The six action rows, defined ONCE at module level. Component identity
+   * stability matters here: when the panel re-renders (status retries, the
+   * auto-start toggle, theme changes) React must keep each row MOUNTED so
+   * its busy/result state survives — otherwise the user's query results
+   * vanish the moment anything else updates. Results therefore persist
+   * until the panel unmounts (leaving the plugin page), which is the
+   * intended "收起发生在退出页面之后" behavior.
    */
-  function makeRow(ctx, spec) {
-    function OllamaRow(props) {
-      var t = makeTranslator(ctx);
-      var busy = React.useState(false);
-      /** Seeded from the host's cached facts (the version row shows the boot
-       *  auto-check result without the user clicking again). */
-      var result = React.useState(function () {
-        if (props.seedResult === null || props.seedResult === undefined) return null;
-        var view = spec.renderResult(props.seedResult, t, spec.params || {});
-        return view && view.text ? view : null;
-      });
-
-      /** The button click: mark busy, run, keep the last outcome. */
-      function onAction(event) {
-        if (event && event.currentTarget) event.currentTarget.disabled = true;
-        busy[1](true);
-        result[1]({ text: t('waiting'), tone: 'wait' });
-        spec.run(ctx, t).then(function (outcome) {
-          busy[1](false);
-          var view = spec.renderResult(outcome, t, spec.params || {});
-          result[1](view && view.text ? view : null);
-          if (spec.onDone) spec.onDone(ctx, outcome);
-        }).catch(function () {
-          busy[1](false);
-          result[1]({ text: t('apiError', { error: 'unknown' }), tone: 'fail' });
-        });
+  var ROW_DEFS = [
+    {
+      key: 'start',
+      title: 'startTitle',
+      desc: 'startDesc',
+      button: 'startButton',
+      buttonDisabledLabel: 'startDisabledLabel',
+      waitingKey: 'startWaiting',
+      run: function () {
+        return callHost('/start');
+      },
+      renderResult: function (outcome, translate) {
+        if (outcome === null || outcome === undefined) return null;
+        if (outcome.error) {
+          return { text: translate('startError', { error: outcome.error }), tone: 'fail' };
+        }
+        if (outcome.started === true && outcome.reason === 'not-ready-within-30s') {
+          return { text: translate('startNotReady', { pid: outcome.pid }), tone: 'wait' };
+        }
+        if (outcome.started === true) {
+          return { text: translate('startStarted', { pid: outcome.pid }), tone: 'ok' };
+        }
+        return { text: translate('startSkipped'), tone: 'ok' };
       }
-
-      return React.createElement(
-        'div',
-        { className: 'oa_row' },
-        React.createElement(
-          'div',
-          { className: 'oa_text' },
-          React.createElement('div', { className: 'oa_title', children: t(spec.title) }),
-          React.createElement('div', {
-            className: 'oa_desc',
-            children: spec.desc === null ? null : t(spec.desc, spec.params || {})
+    },
+    {
+      key: 'models',
+      title: 'modelsTitle',
+      desc: 'modelsDesc',
+      button: 'modelsButton',
+      run: function () {
+        return callHost('/models');
+      },
+      renderResult: function (outcome, translate) {
+        if (outcome === null || outcome === undefined) return null;
+        if (outcome.ok !== true) {
+          return { text: translate('modelsFail', { error: outcome.error || 'no response' }), tone: 'fail' };
+        }
+        if (outcome.source === 'cli') {
+          var parts = [];
+          var listRows = outcome.list && Array.isArray(outcome.list.rows) ? outcome.list.rows : [];
+          var psRows = outcome.ps && Array.isArray(outcome.ps.rows) ? outcome.ps.rows : [];
+          var kv = function (label, value) {
+            return value ? label + ': ' + value : '';
+          };
+          // Section 1: pulled models (names + sizes, localized labels).
+          if (outcome.list && outcome.list.error) {
+            parts.push(translate('modelsListFailed', { error: String(outcome.list.error).slice(0, 80) }));
+          } else if (listRows.length === 0) {
+            parts.push(translate('modelsHeadList') + '\n' + translate('modelsNone'));
+          } else {
+            parts.push(translate('modelsHeadList') + '\n' + listRows.map(function (r) {
+              return '· ' + r.name + '  ' + [
+                kv(translate('modelsSizeLabel'), r.size),
+                kv(translate('modelsModifiedLabel'), r.modified)
+              ].filter(Boolean).join('  ');
+            }).join('\n'));
+          }
+          // Section 2: currently loaded models (usage + runtime, localized).
+          var anySectionError = (outcome.list && !!outcome.list.error) || (outcome.ps && !!outcome.ps.error);
+          if (outcome.ps && outcome.ps.error) {
+            parts.push(translate('modelsPsFailed', { error: String(outcome.ps.error).slice(0, 80) }));
+          } else if (psRows.length === 0) {
+            parts.push(translate('modelsHeadPs') + '\n' + translate('modelsPsEmpty'));
+          } else {
+            parts.push(translate('modelsHeadPs') + '\n' + psRows.map(function (r) {
+              return '· ' + r.name + '  ' + [
+                kv(translate('modelsUsageLabel'), r.size),
+                kv(translate('modelsProcessorLabel'), r.processor),
+                kv(translate('modelsContextLabel'), r.context),
+                kv(translate('modelsRunnerLabel'), r.runner),
+                kv(translate('modelsUntilLabel'), r.until)
+              ].filter(Boolean).join('  ');
+            }).join('\n'));
+          }
+          return {
+            text: parts.join('\n\n'),
+            tone: anySectionError ? 'fail' : ((listRows.length > 0 || psRows.length > 0) ? 'ok' : 'wait')
+          };
+        }
+        // api fallback (/api/tags): names only, no sizes.
+        if (Array.isArray(outcome.models)) {
+          if (outcome.models.length === 0) {
+            return { text: translate('modelsApiEmpty'), tone: 'wait' };
+          }
+          var lines = outcome.models.map(function (name) { return '· ' + name; }).join('\n');
+          return {
+            text: translate('modelsApiOk', { count: outcome.models.length }) + '\n' + lines,
+            tone: 'ok'
+          };
+        }
+        return { text: translate('modelsFail', { error: 'no response' }), tone: 'fail' };
+      }
+    },
+    {
+      key: 'listen',
+      title: 'listenTitle',
+      desc: 'listenDesc',
+      button: 'listenButton',
+      run: function () {
+        return callHost('/health');
+      },
+      renderResult: function (outcome, translate) {
+        if (outcome === null || outcome === undefined) return null;
+        if (outcome.enabled === true) {
+          return {
+            text: translate('listenEnabled', { models: outcome.modelCount !== null && outcome.modelCount !== undefined ? outcome.modelCount : '?' }),
+            tone: 'ok'
+          };
+        }
+        return {
+          text: translate('listenDisabled', { error: outcome.error || 'no response' }),
+          tone: 'fail'
+        };
+      }
+    },
+    {
+      key: 'embed',
+      title: 'embedTitle',
+      desc: 'embedDesc',
+      button: 'embedButton',
+      run: function () {
+        return callHost('/embed-test');
+      },
+      renderResult: function (outcome, translate) {
+        if (outcome === null || outcome === undefined) return null;
+        if (outcome.ok === true) {
+          return {
+            text: translate('embedOk', {
+              count: outcome.count,
+              dimension: outcome.dimension !== null && outcome.dimension !== undefined ? outcome.dimension : '?'
+            }),
+            tone: 'ok'
+          };
+        }
+        return {
+          text: translate('embedFail', { error: outcome.error || 'no response' }),
+          tone: 'fail'
+        };
+      }
+    },
+    {
+      key: 'version',
+      title: 'versionTitle',
+      desc: 'versionDesc',
+      button: 'versionButton',
+      run: function () {
+        return callHost('/version');
+      },
+      renderResult: function (outcome, translate) {
+        if (outcome === null || outcome === undefined) return null;
+        if (outcome.ok === true && outcome.version) {
+          return { text: translate('versionResult', { version: outcome.version }), tone: 'ok' };
+        }
+        return {
+          text: translate('versionFail', { error: outcome.error || 'unknown' }),
+          tone: 'fail'
+        };
+      }
+    },
+    {
+      key: 'ipv4',
+      title: 'ipv4Title',
+      desc: 'ipv4Desc',
+      button: 'ipv4Button',
+      run: function () {
+        return callHost('/ipv4-cli');
+      },
+      renderResult: function (outcome, translate) {
+        if (outcome === null || outcome === undefined) return null;
+        if (outcome.ok === true) {
+          return { text: translate('ipv4Ok'), tone: 'ok' };
+        }
+        return {
+          text: translate('ipv4Fail', {
+            code: outcome.code !== null && outcome.code !== undefined ? outcome.code : '?',
+            output: String(outcome.output || '').slice(0, 160)
           }),
-          result[0]
-            ? React.createElement('div', {
-              className: 'oa_result oa_result_' + (result[0].tone || ''),
-              children: result[0].text
-            })
-            : null
-        ),
-        React.createElement(
-          'button',
-          {
-            type: 'button',
-            className: 'oa_btn',
-            disabled: busy[0] || (spec.disabled !== undefined ? spec.disabled : false),
-            onClick: onAction
-          },
-          busy[0]
-            ? t(spec.waitingKey || 'waiting')
-            : (spec.buttonDisabledLabel !== undefined && spec.disabled
-              ? t(spec.buttonDisabledLabel, spec.params || {})
-              : t(spec.button, spec.params || {}))
-        )
-      );
+          tone: 'fail'
+        };
+      }
     }
-    OllamaRow.displayName = 'OllamaRow';
-    return OllamaRow;
+  ];
+
+  /**
+   * The single stable row component shared by all action rows.
+   * @param {object} props - { ctx, t, spec, disabled, seedResult, onDone }
+   */
+  function ActionRow(props) {
+    var t = makeTranslator(props.ctx);
+    var spec = props.spec;
+    var busy = React.useState(false);
+    var result = React.useState(null);
+    /** Seed view (host boot-time facts, e.g. the auto version check) shows
+     *  until the user's own click produces a result for this row. */
+    var seedView = null;
+    if (props.seedResult !== null && props.seedResult !== undefined) {
+      var s = spec.renderResult(props.seedResult, t, {});
+      if (s && s.text) seedView = s;
+    }
+
+    /** The button click: mark busy, run, keep the last outcome. */
+    function onAction(event) {
+      if (event && event.currentTarget) event.currentTarget.disabled = true;
+      busy[1](true);
+      result[1]({ text: t('waiting'), tone: 'wait' });
+      spec.run(props.ctx, t).then(function (outcome) {
+        busy[1](false);
+        var view = spec.renderResult(outcome, t, {});
+        result[1](view && view.text ? view : null);
+        if (props.onDone) props.onDone(outcome);
+      }).catch(function () {
+        busy[1](false);
+        result[1]({ text: t('apiError', { error: 'unknown' }), tone: 'fail' });
+      });
+    }
+
+    var shown = result[0] !== null ? result[0] : seedView;
+    var disabled = busy[0] || (props.disabled === true);
+
+    return React.createElement(
+      'div',
+      { className: 'oa_row' },
+      React.createElement(
+        'div',
+        { className: 'oa_text' },
+        React.createElement('div', { className: 'oa_title', children: t(spec.title) }),
+        React.createElement('div', {
+          className: 'oa_desc',
+          children: spec.desc === null ? null : t(spec.desc)
+        }),
+        shown
+          ? React.createElement('div', {
+            className: 'oa_result oa_result_' + (shown.tone || ''),
+            children: shown.text
+          })
+          : null
+      ),
+      React.createElement(
+        'button',
+        {
+          type: 'button',
+          className: 'oa_btn',
+          disabled: disabled,
+          onClick: onAction
+        },
+        busy[0]
+          ? t(spec.waitingKey || 'waiting')
+          : (spec.buttonDisabledLabel !== undefined && props.disabled === true
+            ? t(spec.buttonDisabledLabel)
+            : t(spec.button))
+      )
+    );
   }
+  ActionRow.displayName = 'ActionRow';
 
   /**
    * The auto-start switch row: a real toggle (role="switch"), seeded from the
    * host's persisted preference. Flipping ON also starts the service now;
-   * flipping OFF only changes the next host boot.
-   * @param {object} ctx - the plugin's client cordis context (closure).
-   * @param {object} props - { t, autoStart, busy, onToggle }
+   * flipping OFF only changes the next host boot. Stable module-level
+   * component (same reasoning as ActionRow): its result survives panel
+   * re-renders until the page is left.
+   * @param {object} rowProps - { ctx, t, autoStart, busy, onToggle }
    */
-  function makeAutoStartRow(ctx, props) {
-    function AutoStartRow(rowProps) {
-      var t = makeTranslator(ctx);
+  function AutoStartRow(rowProps) {
+      var t = makeTranslator(rowProps.ctx);
       var result = React.useState(null);
       var on = rowProps.autoStart !== false;
 
@@ -396,10 +589,8 @@
           React.createElement('span', { className: 'oa_switch_knob', 'aria-hidden': 'true' })
         )
       );
-    }
-    AutoStartRow.displayName = 'AutoStartRow';
-    return AutoStartRow;
   }
+  AutoStartRow.displayName = 'AutoStartRow';
 
   /**
    * The panel body: reads the host's status once on mount so the start row
@@ -513,214 +704,16 @@
         ? !!(liveState.running || liveState.listening)
         : false;
 
-      var rows = [
-        {
-          key: 'start',
-          spec: {
-            title: 'startTitle',
-            desc: 'startDesc',
-            button: 'startButton',
-            buttonDisabledLabel: 'startDisabledLabel',
-            waitingKey: 'startWaiting',
-            disabled: running,
-            run: function () {
-              return callHost('/start');
-            },
-            renderResult: function (outcome, translate, params) {
-              if (outcome === null || outcome === undefined) return null;
-              if (outcome.error) {
-                return { text: translate('startError', { error: outcome.error }), tone: 'fail' };
-              }
-              if (outcome.started === true && outcome.reason === 'not-ready-within-30s') {
-                return { text: translate('startNotReady', { pid: outcome.pid }), tone: 'wait' };
-              }
-              if (outcome.started === true) {
-                return { text: translate('startStarted', { pid: outcome.pid }), tone: 'ok' };
-              }
-              return { text: translate('startSkipped'), tone: 'ok' };
-            },
-            onDone: refreshLive
-          }
-        },
-        {
-          key: 'models',
-          spec: {
-            title: 'modelsTitle',
-            desc: 'modelsDesc',
-            button: 'modelsButton',
-            run: function () {
-              return callHost('/models');
-            },
-            renderResult: function (outcome, translate) {
-              if (outcome === null || outcome === undefined) return null;
-              if (outcome.ok !== true) {
-                return { text: translate('modelsFail', { error: outcome.error || 'no response' }), tone: 'fail' };
-              }
-              if (outcome.source === 'cli') {
-                var parts = [];
-                var listRows = outcome.list && Array.isArray(outcome.list.rows) ? outcome.list.rows : [];
-                var psRows = outcome.ps && Array.isArray(outcome.ps.rows) ? outcome.ps.rows : [];
-                var kv = function (label, value) {
-                  return value ? label + ': ' + value : '';
-                };
-                // Section 1: pulled models (names + sizes, localized labels).
-                if (outcome.list && outcome.list.error) {
-                  parts.push(translate('modelsListFailed', { error: String(outcome.list.error).slice(0, 80) }));
-                } else if (listRows.length === 0) {
-                  parts.push(translate('modelsHeadList') + '\n' + translate('modelsNone'));
-                } else {
-                  parts.push(translate('modelsHeadList') + '\n' + listRows.map(function (r) {
-                    return '· ' + r.name + '  ' + [
-                      kv(translate('modelsSizeLabel'), r.size),
-                      kv(translate('modelsModifiedLabel'), r.modified)
-                    ].filter(Boolean).join('  ');
-                  }).join('\n'));
-                }
-                // Section 2: currently loaded models (usage + runtime, localized).
-                var anySectionError = (outcome.list && !!outcome.list.error) || (outcome.ps && !!outcome.ps.error);
-                if (outcome.ps && outcome.ps.error) {
-                  parts.push(translate('modelsPsFailed', { error: String(outcome.ps.error).slice(0, 80) }));
-                } else if (psRows.length === 0) {
-                  parts.push(translate('modelsHeadPs') + '\n' + translate('modelsPsEmpty'));
-                } else {
-                  parts.push(translate('modelsHeadPs') + '\n' + psRows.map(function (r) {
-                    return '· ' + r.name + '  ' + [
-                      kv(translate('modelsUsageLabel'), r.size),
-                      kv(translate('modelsProcessorLabel'), r.processor),
-                      kv(translate('modelsContextLabel'), r.context),
-                      kv(translate('modelsRunnerLabel'), r.runner),
-                      kv(translate('modelsUntilLabel'), r.until)
-                    ].filter(Boolean).join('  ');
-                  }).join('\n'));
-                }
-                return {
-                  text: parts.join('\n\n'),
-                  tone: anySectionError ? 'fail' : ((listRows.length > 0 || psRows.length > 0) ? 'ok' : 'wait')
-                };
-              }
-              // api fallback (/api/tags): names only, no sizes.
-              if (Array.isArray(outcome.models)) {
-                if (outcome.models.length === 0) {
-                  return { text: translate('modelsApiEmpty'), tone: 'wait' };
-                }
-                var lines = outcome.models.map(function (name) { return '· ' + name; }).join('\n');
-                return {
-                  text: translate('modelsApiOk', { count: outcome.models.length }) + '\n' + lines,
-                  tone: 'ok'
-                };
-              }
-              return { text: translate('modelsFail', { error: 'no response' }), tone: 'fail' };
-            }
-          }
-        },
-        {
-          key: 'listen',
-          spec: {
-            title: 'listenTitle',
-            desc: 'listenDesc',
-            button: 'listenButton',
-            run: function () {
-              return callHost('/health');
-            },
-            renderResult: function (outcome, translate, params) {
-              if (outcome === null || outcome === undefined) return null;
-              if (outcome.enabled === true) {
-                return {
-                  text: translate('listenEnabled', { models: outcome.modelCount !== null && outcome.modelCount !== undefined ? outcome.modelCount : '?' }),
-                  tone: 'ok'
-                };
-              }
-              return {
-                text: translate('listenDisabled', { error: outcome.error || 'no response' }),
-                tone: 'fail'
-              };
-            }
-          }
-        },
-        {
-          key: 'embed',
-          spec: {
-            title: 'embedTitle',
-            desc: 'embedDesc',
-            button: 'embedButton',
-            run: function () {
-              return callHost('/embed-test');
-            },
-            renderResult: function (outcome, translate, params) {
-              if (outcome === null || outcome === undefined) return null;
-              if (outcome.ok === true) {
-                return {
-                  text: translate('embedOk', {
-                    count: outcome.count,
-                    dimension: outcome.dimension !== null && outcome.dimension !== undefined ? outcome.dimension : '?'
-                  }),
-                  tone: 'ok'
-                };
-              }
-              return {
-                text: translate('embedFail', { error: outcome.error || 'no response' }),
-                tone: 'fail'
-              };
-            }
-          }
-        },
-        {
-          key: 'version',
-          spec: {
-            title: 'versionTitle',
-            desc: 'versionDesc',
-            button: 'versionButton',
-            run: function () {
-              return callHost('/version');
-            },
-            renderResult: function (outcome, translate, params) {
-              if (outcome === null || outcome === undefined) return null;
-              if (outcome.ok === true && outcome.version) {
-                return { text: translate('versionResult', { version: outcome.version }), tone: 'ok' };
-              }
-              return {
-                text: translate('versionFail', { error: outcome.error || 'unknown' }),
-                tone: 'fail'
-              };
-            }
-          }
-        },
-        {
-          key: 'ipv4',
-          spec: {
-            title: 'ipv4Title',
-            desc: 'ipv4Desc',
-            button: 'ipv4Button',
-            run: function () {
-              return callHost('/ipv4-cli');
-            },
-            renderResult: function (outcome, translate, params) {
-              if (outcome === null || outcome === undefined) return null;
-              if (outcome.ok === true) {
-                return { text: translate('ipv4Ok'), tone: 'ok' };
-              }
-              return {
-                text: translate('ipv4Fail', {
-                  code: outcome.code !== null && outcome.code !== undefined ? outcome.code : '?',
-                  output: String(outcome.output || '').slice(0, 160)
-                }),
-                tone: 'fail'
-              };
-            }
-          }
-        }
-      ];
-
       // The host booted and ran the automatic version check; surface its
-      // cached value as the version row's resting result (until the user
-      // runs the check again).
-      var versionOutcome = liveState !== null && liveState !== undefined && liveState.versionChecked
+      // cached value as the version row's seed result (until the user
+      // runs the check again). Row state itself stays with the (stable)
+      // ActionRow components, so results persist until the panel unmounts.
+      var versionSeed = liveState !== null && liveState !== undefined && liveState.versionChecked
         ? (liveState.version
           ? { ok: true, version: liveState.version }
           : { ok: false, error: 'boot check failed' })
         : null;
 
-      var AutoStartRow = makeAutoStartRow(ctx);
       return React.createElement(
         'div',
         { className: 'oa_panel' },
@@ -730,17 +723,19 @@
         }),
         React.createElement(AutoStartRow, {
           key: 'auto-start',
-          t: props.t,
+          ctx: ctx,
           autoStart: liveState !== null && liveState !== undefined ? liveState.autoStart : undefined,
           busy: toggleBusy[0],
           onToggle: onToggle
         }),
-        rows.map(function (row) {
-          var Row = makeRow(ctx, row.spec);
-          return React.createElement(Row, {
-            key: row.key,
-            t: props.t,
-            seedResult: row.key === 'version' ? versionOutcome : null
+        ROW_DEFS.map(function (def) {
+          return React.createElement(ActionRow, {
+            key: def.key,
+            ctx: ctx,
+            spec: def,
+            disabled: def.key === 'start' ? running : undefined,
+            seedResult: def.key === 'version' ? versionSeed : null,
+            onDone: def.key === 'start' ? refreshLive : undefined
           });
         })
       );
