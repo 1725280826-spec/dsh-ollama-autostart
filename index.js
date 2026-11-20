@@ -84,6 +84,23 @@ function pidAlive(pid) {
   }
 }
 
+/**
+ * True only when `pid` is a live `ollama` process. Guards the pidfile dedupe:
+ * after a reboot the kernel reuses PIDs, so a stale pidfile entry can point at
+ * an unrelated live process — `pidAlive` alone would then report "booting" and
+ * suppress the (needed) re-spawn, leaving the port down forever. Requiring the
+ * cmdline to actually be `ollama` (and not the DSH host itself) makes a dead or
+ * reused pid fall through to a fresh spawn.
+ */
+function isOllamaProcess(pid) {
+  try {
+    const cmd = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").join(" ");
+    return /(^|[\/\s])ollama(\s|$)/i.test(cmd) && !/\bdsh\b/i.test(cmd);
+  } catch {
+    return false;
+  }
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -186,7 +203,10 @@ export function apply(ctx, config) {
 
     if (existsSync(PIDFILE)) {
       const pid = Number(readFileSync(PIDFILE, "utf8").trim());
-      if (Number.isInteger(pid) && pid > 0 && pidAlive(pid)) {
+      // Only a LIVE OLLAMA pid may claim "booting" (and suppress the spawn).
+      // A dead pid or a reused (post-reboot) non-ollama pid is stale: drop the
+      // pidfile and fall through to a fresh spawn below.
+      if (Number.isInteger(pid) && pid > 0 && pidAlive(pid) && isOllamaProcess(pid)) {
         state.running = true;
         return { running: true, started: false, reason: "booting", pid };
       }
